@@ -117,53 +117,44 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify .so exists
+      - name: Collect .so files
         run: |
           echo "Requested SO_PATH=$SO_PATH"
           echo "APK_PATH=$APK_PATH"
 
-          pick_so() {
+          SO_LIST=so_targets.txt
+          > "$SO_LIST"
+
+          add_if_exists() {
             local path="$1"
-            if [ -n "$path" ] && [ -f "$path" ]; then
-              echo "$path"
-              return 0
+            if [ -f "$path" ]; then
+              realpath "$path"
+            elif [ -d "$path" ]; then
+              find "$path" -type f -name '*.so'
             fi
-            return 1
           }
 
-          FINAL_SO=""
+          add_if_exists "$SO_PATH" >> "$SO_LIST"
+          add_if_exists "lib" >> "$SO_LIST"
+          find . -type f -name '*.so' -not -path '*/.git/*' >> "$SO_LIST"
 
-          # 1) honor explicit path if it exists
-          if pick_so "$SO_PATH"; then
-            FINAL_SO="$SO_PATH"
-          fi
-
-          # 2) try common lib directory inside repo
-          if [ -z "$FINAL_SO" ]; then
-            FINAL_SO="$(find lib -type f -name '*.so' 2>/dev/null | head -n 1 || true)"
-          fi
-
-          # 3) try anywhere in repo (excluding .git)
-          if [ -z "$FINAL_SO" ]; then
-            FINAL_SO="$(find . -type f -name '*.so' -not -path '*/.git/*' | head -n 1 || true)"
-          fi
-
-          # 4) extract from APK libs if still not found
-          if [ -z "$FINAL_SO" ] && [ -f "$APK_PATH" ]; then
+          if [ ! -s "$SO_LIST" ] && [ -f "$APK_PATH" ]; then
             echo "Extracting .so files from APK: $APK_PATH"
             mkdir -p extracted_libs
             unzip -qq "$APK_PATH" "lib/*.so" -d extracted_libs || true
-            FINAL_SO="$(find extracted_libs -type f -name '*.so' | head -n 1 || true)"
+            find extracted_libs -type f -name '*.so' >> "$SO_LIST"
           fi
 
-          if [ -z "$FINAL_SO" ]; then
-            echo "No .so found (checked explicit path, lib/**, repo, and APK libs)" >&2
+          sort -u "$SO_LIST" -o "$SO_LIST"
+
+          if [ ! -s "$SO_LIST" ]; then
+            echo "No .so found (checked explicit path/dir, lib/**, repo, and APK libs)" >&2
             exit 1
           fi
 
-          echo "Selected SO: $FINAL_SO"
-          ls -lh "$FINAL_SO"
-          echo "FINAL_SO=$FINAL_SO" >> "$GITHUB_ENV"
+          echo "Will analyze these .so files:"
+          cat "$SO_LIST"
+          echo "SO_LIST=$SO_LIST" >> "$GITHUB_ENV"
         shell: bash
 
       - name: Install cross binutils (for objdump on ARM/x86)
@@ -177,23 +168,33 @@ jobs:
           set -euo pipefail
           OUT=so-report
           mkdir -p "$OUT"
-          FILE_INFO="$(file "$FINAL_SO")"
-          echo "$FILE_INFO" | tee "$OUT/file.txt"
-          readelf -a "$FINAL_SO" > "$OUT/readelf.txt"
-          nm -D "$FINAL_SO" > "$OUT/nm.txt"
+          idx=0
+          while IFS= read -r sofile; do
+            [ -n "$sofile" ] || continue
+            safe_name="so-${idx}-$(basename "$sofile" | tr -cs 'A-Za-z0-9._-' '_')"
+            dest="$OUT/$safe_name"
+            mkdir -p "$dest"
 
-          OBJDUMP_CMD="objdump -d -C"
-          if echo "$FILE_INFO" | grep -qi "ARM aarch64"; then
-            OBJDUMP_CMD="aarch64-linux-gnu-objdump -d -C"
-          elif echo "$FILE_INFO" | grep -qi "ARM"; then
-            OBJDUMP_CMD="arm-linux-gnueabi-objdump -d -C"
-          fi
+            FILE_INFO="$(file "$sofile")"
+            echo "$FILE_INFO" | tee "$dest/file.txt"
+            readelf -a "$sofile" > "$dest/readelf.txt" || true
+            nm -D "$sofile" > "$dest/nm.txt" || true
 
-          if ! $OBJDUMP_CMD "$FINAL_SO" > "$OUT/objdump.txt"; then
-            echo "objdump failed with $OBJDUMP_CMD (logged), continuing" >&2
-          fi
+            OBJDUMP_CMD="objdump -d -C"
+            if echo "$FILE_INFO" | grep -qi "ARM aarch64"; then
+              OBJDUMP_CMD="aarch64-linux-gnu-objdump -d -C"
+            elif echo "$FILE_INFO" | grep -qi "ARM"; then
+              OBJDUMP_CMD="arm-linux-gnueabi-objdump -d -C"
+            fi
 
-          strings "$FINAL_SO" > "$OUT/strings.txt"
+            if ! $OBJDUMP_CMD "$sofile" > "$dest/objdump.txt"; then
+              echo "objdump failed with $OBJDUMP_CMD for $sofile (logged), continuing" >&2
+            fi
+
+            strings "$sofile" > "$dest/strings.txt" || true
+            idx=$((idx+1))
+          done < "$SO_LIST"
+
           zip -qr so-analysis.zip "$OUT"
         shell: bash
 
@@ -203,4 +204,22 @@ jobs:
           name: so-analysis
           path: so-analysis.zip
           retention-days: 7
+
+      - name: Send .so analysis to Telegram
+        if: ${{ success() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN}" ] || [ -z "${TELEGRAM_CHAT_ID}" ]; then
+            echo "Telegram secrets not configured; skipping send." >&2
+            exit 0
+          fi
+          curl -sS -X POST \
+            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            -F "caption=SO analysis from ${{ github.repository }}@${{ github.sha }}" \
+            -F "document=@so-analysis.zip" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument"
+        shell: bash
 
