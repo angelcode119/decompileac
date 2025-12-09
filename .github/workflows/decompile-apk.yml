@@ -166,15 +166,33 @@ jobs:
           echo "FINAL_SO=$FINAL_SO" >> "$GITHUB_ENV"
         shell: bash
 
+      - name: Install cross binutils (for objdump on ARM/x86)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
+        shell: bash
+
       - name: Analyze .so (metadata, symbols, disasm)
         run: |
           set -euo pipefail
           OUT=so-report
           mkdir -p "$OUT"
-          file "$FINAL_SO" | tee "$OUT/file.txt"
+          FILE_INFO="$(file "$FINAL_SO")"
+          echo "$FILE_INFO" | tee "$OUT/file.txt"
           readelf -a "$FINAL_SO" > "$OUT/readelf.txt"
           nm -D "$FINAL_SO" > "$OUT/nm.txt"
-          objdump -d -C "$FINAL_SO" > "$OUT/objdump.txt"
+
+          OBJDUMP_CMD="objdump -d -C"
+          if echo "$FILE_INFO" | grep -qi "ARM aarch64"; then
+            OBJDUMP_CMD="aarch64-linux-gnu-objdump -d -C"
+          elif echo "$FILE_INFO" | grep -qi "ARM"; then
+            OBJDUMP_CMD="arm-linux-gnueabi-objdump -d -C"
+          fi
+
+          if ! $OBJDUMP_CMD "$FINAL_SO" > "$OUT/objdump.txt"; then
+            echo "objdump failed with $OBJDUMP_CMD (logged), continuing" >&2
+          fi
+
           strings "$FINAL_SO" > "$OUT/strings.txt"
           zip -qr so-analysis.zip "$OUT"
         shell: bash
