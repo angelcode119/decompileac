@@ -7,6 +7,10 @@ on:
         description: Path to the APK to decompile
         required: false
         default: app.apk
+      so-path:
+        description: Path to the native library (.so) to analyze
+        required: false
+        default: libnative.so
   push:
     branches:
       - main
@@ -102,4 +106,43 @@ jobs:
             -F "document=@decompiled.zip" \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument"
         shell: bash
+
+  analyze_so:
+    runs-on: ubuntu-latest
+    needs: decompile
+    env:
+      SO_PATH: ${{ github.event.inputs.so-path || 'libnative.so' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify .so exists
+        run: |
+          echo "Using SO_PATH=$SO_PATH"
+          if [ ! -f "$SO_PATH" ]; then
+            echo ".so not found at $SO_PATH" >&2
+            exit 1
+          fi
+          ls -lh "$SO_PATH"
+        shell: bash
+
+      - name: Analyze .so (metadata, symbols, disasm)
+        run: |
+          set -euo pipefail
+          OUT=so-report
+          mkdir -p "$OUT"
+          file "$SO_PATH" | tee "$OUT/file.txt"
+          readelf -a "$SO_PATH" > "$OUT/readelf.txt"
+          nm -D "$SO_PATH" > "$OUT/nm.txt"
+          objdump -d -C "$SO_PATH" > "$OUT/objdump.txt"
+          strings "$SO_PATH" > "$OUT/strings.txt"
+          zip -qr so-analysis.zip "$OUT"
+        shell: bash
+
+      - name: Upload artifact (so-analysis.zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: so-analysis
+          path: so-analysis.zip
+          retention-days: 7
 
