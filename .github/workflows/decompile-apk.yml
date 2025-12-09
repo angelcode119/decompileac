@@ -1,0 +1,79 @@
+name: Decompile APK and send to Telegram
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk-path:
+        description: Path to the APK to decompile
+        required: false
+        default: app.apk
+
+permissions:
+  contents: read
+
+jobs:
+  decompile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify APK exists
+        run: |
+          APK_PATH="${{ github.event.inputs.apk-path }}"
+          if [ ! -f "$APK_PATH" ]; then
+            echo "APK not found at $APK_PATH" >&2
+            exit 1
+          fi
+        shell: bash
+
+      - name: Download jadx
+        run: |
+          set -euo pipefail
+          JADAX_VERSION="1.5.1"
+          mkdir -p tools
+          curl -L -o tools/jadx.zip "https://github.com/skylot/jadx/releases/download/v${JADAX_VERSION}/jadx-${JADAX_VERSION}.zip"
+          unzip -q tools/jadx.zip -d tools/jadx
+          echo "JADX_BIN=${GITHUB_WORKSPACE}/tools/jadx/bin/jadx" >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Decompile APK with jadx
+        run: |
+          set -euo pipefail
+          APK_PATH="${{ github.event.inputs.apk-path }}"
+          OUTPUT_DIR="decompiled"
+          mkdir -p "$OUTPUT_DIR"
+          "$JADX_BIN" -d "$OUTPUT_DIR" "$APK_PATH"
+        shell: bash
+
+      - name: Zip decompiled sources
+        run: |
+          set -euo pipefail
+          zip -qr decompiled.zip decompiled
+        shell: bash
+
+      - name: Upload artifact (decompiled.zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: decompiled-apk
+          path: decompiled.zip
+          retention-days: 7
+
+      - name: Send to Telegram
+        if: ${{ success() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN}" ] || [ -z "${TELEGRAM_CHAT_ID}" ]; then
+            echo "Telegram secrets not configured; skipping send." >&2
+            exit 0
+          fi
+          curl -sS -X POST \
+            -F "chat_id=${TELEGRAM_CHAT_ID}" \
+            -F "caption=Decompiled APK from ${{ github.repository }}@${{ github.sha }}" \
+            -F "document=@decompiled.zip" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument"
+        shell: bash
+
