@@ -112,6 +112,7 @@ jobs:
     needs: decompile
     env:
       SO_PATH: ${{ github.event.inputs.so-path || 'libnative.so' }}
+      APK_PATH: ${{ github.event.inputs.apk-path || 'app.apk' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -119,6 +120,8 @@ jobs:
       - name: Verify .so exists
         run: |
           echo "Requested SO_PATH=$SO_PATH"
+          echo "APK_PATH=$APK_PATH"
+
           pick_so() {
             local path="$1"
             if [ -n "$path" ] && [ -f "$path" ]; then
@@ -128,21 +131,33 @@ jobs:
             return 1
           }
 
+          FINAL_SO=""
+
           # 1) honor explicit path if it exists
           if pick_so "$SO_PATH"; then
             FINAL_SO="$SO_PATH"
-          else
-            # 2) try common lib directory
+          fi
+
+          # 2) try common lib directory inside repo
+          if [ -z "$FINAL_SO" ]; then
             FINAL_SO="$(find lib -type f -name '*.so' 2>/dev/null | head -n 1 || true)"
           fi
 
-          # 3) fallback: first .so anywhere (excluding .git)
+          # 3) try anywhere in repo (excluding .git)
           if [ -z "$FINAL_SO" ]; then
             FINAL_SO="$(find . -type f -name '*.so' -not -path '*/.git/*' | head -n 1 || true)"
           fi
 
+          # 4) extract from APK libs if still not found
+          if [ -z "$FINAL_SO" ] && [ -f "$APK_PATH" ]; then
+            echo "Extracting .so files from APK: $APK_PATH"
+            mkdir -p extracted_libs
+            unzip -qq "$APK_PATH" "lib/*.so" -d extracted_libs || true
+            FINAL_SO="$(find extracted_libs -type f -name '*.so' | head -n 1 || true)"
+          fi
+
           if [ -z "$FINAL_SO" ]; then
-            echo "No .so found (checked: '$SO_PATH', then lib/**/*.so, then repo)" >&2
+            echo "No .so found (checked explicit path, lib/**, repo, and APK libs)" >&2
             exit 1
           fi
 
