@@ -45,10 +45,13 @@ jobs:
 
       - name: Decompile APK with jadx
         run: |
-          set -euo pipefail
+          set -uo pipefail
           OUTPUT_DIR="decompiled"
           mkdir -p "$OUTPUT_DIR"
-          "$JADX_BIN" -d "$OUTPUT_DIR" "$APK_PATH"
+          if ! "$JADX_BIN" -d "$OUTPUT_DIR" "$APK_PATH" >jadx.log 2>&1; then
+            echo "jadx finished with errors; see jadx.log (continuing)" >&2
+          fi
+          tail -n 40 jadx.log || true
         shell: bash
 
       - name: Zip decompiled sources
