@@ -48,7 +48,20 @@ jobs:
           set -uo pipefail
           OUTPUT_DIR="decompiled"
           mkdir -p "$OUTPUT_DIR"
-          if ! "$JADX_BIN" -d "$OUTPUT_DIR" "$APK_PATH" >jadx.log 2>&1; then
+          # Full decompilation options:
+          # --show-bad-code : keep problematic code blocks instead of skipping
+          # --export-gradle : also emit a gradle-style project
+          # --use-imports   : produce cleaner imports in java output
+          # --deobf*        : light deobfuscation to stabilize names
+          if ! "$JADX_BIN" \
+            --show-bad-code \
+            --export-gradle \
+            --use-imports \
+            --deobf \
+            --deobf-min 3 \
+            --deobf-max 150 \
+            -d "$OUTPUT_DIR" \
+            "$APK_PATH" >jadx.log 2>&1; then
             echo "jadx finished with errors; see jadx.log (continuing)" >&2
           fi
           tail -n 40 jadx.log || true
