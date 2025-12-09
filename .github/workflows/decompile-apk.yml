@@ -7,6 +7,9 @@ on:
         description: Path to the APK to decompile
         required: false
         default: app.apk
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -21,10 +24,15 @@ jobs:
       - name: Verify APK exists
         run: |
           APK_PATH="${{ github.event.inputs.apk-path }}"
+          if [ -z "$APK_PATH" ]; then
+            echo "APK path is empty" >&2
+            exit 1
+          fi
           if [ ! -f "$APK_PATH" ]; then
             echo "APK not found at $APK_PATH" >&2
             exit 1
           fi
+          ls -lh "$APK_PATH"
         shell: bash
 
       - name: Download jadx
