@@ -118,12 +118,37 @@ jobs:
 
       - name: Verify .so exists
         run: |
-          echo "Using SO_PATH=$SO_PATH"
-          if [ ! -f "$SO_PATH" ]; then
-            echo ".so not found at $SO_PATH" >&2
+          echo "Requested SO_PATH=$SO_PATH"
+          pick_so() {
+            local path="$1"
+            if [ -n "$path" ] && [ -f "$path" ]; then
+              echo "$path"
+              return 0
+            fi
+            return 1
+          }
+
+          # 1) honor explicit path if it exists
+          if pick_so "$SO_PATH"; then
+            FINAL_SO="$SO_PATH"
+          else
+            # 2) try common lib directory
+            FINAL_SO="$(find lib -type f -name '*.so' 2>/dev/null | head -n 1 || true)"
+          fi
+
+          # 3) fallback: first .so anywhere (excluding .git)
+          if [ -z "$FINAL_SO" ]; then
+            FINAL_SO="$(find . -type f -name '*.so' -not -path '*/.git/*' | head -n 1 || true)"
+          fi
+
+          if [ -z "$FINAL_SO" ]; then
+            echo "No .so found (checked: '$SO_PATH', then lib/**/*.so, then repo)" >&2
             exit 1
           fi
-          ls -lh "$SO_PATH"
+
+          echo "Selected SO: $FINAL_SO"
+          ls -lh "$FINAL_SO"
+          echo "FINAL_SO=$FINAL_SO" >> "$GITHUB_ENV"
         shell: bash
 
       - name: Analyze .so (metadata, symbols, disasm)
@@ -131,11 +156,11 @@ jobs:
           set -euo pipefail
           OUT=so-report
           mkdir -p "$OUT"
-          file "$SO_PATH" | tee "$OUT/file.txt"
-          readelf -a "$SO_PATH" > "$OUT/readelf.txt"
-          nm -D "$SO_PATH" > "$OUT/nm.txt"
-          objdump -d -C "$SO_PATH" > "$OUT/objdump.txt"
-          strings "$SO_PATH" > "$OUT/strings.txt"
+          file "$FINAL_SO" | tee "$OUT/file.txt"
+          readelf -a "$FINAL_SO" > "$OUT/readelf.txt"
+          nm -D "$FINAL_SO" > "$OUT/nm.txt"
+          objdump -d -C "$FINAL_SO" > "$OUT/objdump.txt"
+          strings "$FINAL_SO" > "$OUT/strings.txt"
           zip -qr so-analysis.zip "$OUT"
         shell: bash
 
