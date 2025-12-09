@@ -64,7 +64,14 @@ jobs:
             "$APK_PATH" >jadx.log 2>&1; then
             echo "jadx finished with errors; see jadx.log (continuing)" >&2
           fi
-          tail -n 40 jadx.log || true
+          tail -n 80 jadx.log || true
+          FILE_COUNT=$(find "$OUTPUT_DIR" -type f | wc -l | tr -d ' ')
+          if [ "$FILE_COUNT" = "0" ]; then
+            echo "No output files produced by jadx; failing to avoid empty artifact" >&2
+            exit 1
+          fi
+          echo "Decompiled files: $FILE_COUNT"
+          find "$OUTPUT_DIR" -maxdepth 2 -type f | head -n 20
         shell: bash
 
       - name: Zip decompiled sources
