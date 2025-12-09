@@ -51,12 +51,10 @@ jobs:
           # Full decompilation options:
           # --show-bad-code : keep problematic code blocks instead of skipping
           # --export-gradle : also emit a gradle-style project
-          # --use-imports   : produce cleaner imports in java output
           # --deobf*        : light deobfuscation to stabilize names
           if ! "$JADX_BIN" \
             --show-bad-code \
             --export-gradle \
-            --use-imports \
             --deobf \
             --deobf-min 3 \
             --deobf-max 150 \
